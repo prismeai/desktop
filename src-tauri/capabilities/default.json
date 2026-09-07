@@ -4,7 +4,6 @@
   "description": "Capabilities for the trusted local setup window ('main').",
   "windows": ["main"],
   "permissions": [
-    "core:default",
-    "dialog:default"
+    "core:default"
   ]
 }

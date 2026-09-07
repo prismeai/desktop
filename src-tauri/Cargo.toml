@@ -16,9 +16,6 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-# Native "open/save file" dialogs. The read/write themselves go through our own
-# std::fs commands, so we don't need the fs plugin's path-scope wiring.
-tauri-plugin-dialog = "2"
 # Native OS notifications (used by the Notification shim injected into the
 # remote app window — WKWebView has no web Notification API).
 tauri-plugin-notification = "2"
