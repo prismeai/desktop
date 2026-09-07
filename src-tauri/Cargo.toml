@@ -16,9 +16,6 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-# Native OS notifications (used by the Notification shim injected into the
-# remote app window — WKWebView has no web Notification API).
-tauri-plugin-notification = "2"
 # Custom URL scheme (prisme://…) for deep links.
 tauri-plugin-deep-link = "2"
 # Route a second launch (deep link) to the already-running instance.

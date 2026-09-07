@@ -5,14 +5,13 @@
 //! inside a system WebView:
 //!   - server URL persistence
 //!   - the remote "app" window, created here so we can attach:
-//!       * a Notification shim (WKWebView has no web Notification API)
+//!       * a no-op Notification stub (WKWebView has no web Notification API)
 //!       * a download handler (saves to the OS Downloads folder)
 //!   - deep links (prisme://…) + single-instance
-//!   - native notifications plugin (used by the shim)
 //!
 //! Security: sensitive custom commands are guarded to the trusted "main"
-//! window. The remote "app" window gets a narrow capability (notifications
-//! only) — a deliberate trust of the customer's own origin.
+//! window. The remote "app" window is granted no IPC capability, so remote
+//! content (including third-party auth pages) cannot reach any command.
 
 use std::fs;
 use std::path::PathBuf;
@@ -24,23 +23,20 @@ struct Config {
     server_url: Option<String>,
 }
 
-/// Injected into the remote app window BEFORE its page loads. WKWebView (macOS)
-/// does not implement the web Notification API, so we polyfill `window.Notification`
-/// to forward to the native notification plugin. On WebView2 (Windows) this also
-/// routes to native for a consistent experience.
+/// Injected into the remote app window BEFORE its page loads.
+///
+/// WKWebView (macOS) does not implement the web Notification API, so we provide
+/// a harmless no-op stub for `window.Notification` (reports "granted", does
+/// nothing). It deliberately performs NO IPC: this same webview navigates to
+/// third-party auth pages (e.g. accounts.google.com), where any `ipc://` call
+/// is blocked by WebKit as insecure mixed content. Native notifications will be
+/// re-introduced with an origin-scoped capability bound to the customer's
+/// server origin only.
 const NOTIFICATION_SHIM: &str = r#"
 (function () {
   if (window.__prismeNotifShim) return;
   window.__prismeNotifShim = true;
-  var internals = window.__TAURI_INTERNALS__;
-  if (!internals || typeof internals.invoke !== 'function') return;
-  function notify(title, options) {
-    options = options || {};
-    var payload = { title: String(title == null ? '' : title) };
-    if (options.body) payload.body = String(options.body);
-    try { internals.invoke('plugin:notification|notify', { options: payload }); } catch (e) {}
-  }
-  function PrismeNotification(title, options) { notify(title, options); }
+  function PrismeNotification() {}
   PrismeNotification.permission = 'granted';
   PrismeNotification.requestPermission = function () { return Promise.resolve('granted'); };
   PrismeNotification.prototype.close = function () {};
@@ -153,7 +149,6 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             #[cfg(desktop)]

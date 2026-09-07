@@ -1,9 +1,0 @@
-{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "remote-app",
-  "description": "Narrow capability for the customer's own web app (remote 'app' window): native notifications only. A deliberate, reviewable trust of the customer origin — no filesystem, no window/shell access. Privileged custom commands are additionally guarded to the 'main' window in Rust.",
-  "windows": ["app"],
-  "permissions": [
-    "notification:default"
-  ]
-}
