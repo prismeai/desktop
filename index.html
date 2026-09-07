@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Connect to Prisme.ai</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <main class="card">
+      <div class="brand">Prisme.ai</div>
+      <h1>Connect to your server</h1>
+      <p class="subtitle">
+        Enter the URL of your Prisme.ai server, e.g.
+        <code>https://prisme.your-company.com</code>.
+      </p>
+
+      <form id="connect-form" novalidate>
+        <label for="server-url">Server URL</label>
+        <input
+          id="server-url"
+          type="text"
+          inputmode="url"
+          autocomplete="url"
+          placeholder="https://prisme.your-company.com"
+          spellcheck="false"
+          autofocus
+        />
+        <p id="error" class="error" role="alert" hidden></p>
+        <button id="connect-btn" type="submit">Connect</button>
+      </form>
+
+      <!-- Desktop-only capability the web app cannot do on its own: read/write
+           local files. Here just as a POC proof; see README. -->
+      <section class="fs-demo">
+        <span class="fs-demo-title">Local filesystem (desktop only)</span>
+        <div class="fs-demo-row">
+          <button id="read-btn" type="button">Read a document…</button>
+          <button id="write-btn" type="button">Write a test file…</button>
+        </div>
+        <p id="fs-msg" class="fs-msg" hidden></p>
+      </section>
+    </main>
+  </body>
+</html>
