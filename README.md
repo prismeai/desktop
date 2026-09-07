@@ -1,95 +1,64 @@
-# Prisme.ai Desktop (Tauri POC)
+# Prisme.ai Desktop
 
-Standalone desktop shell for the Prisme.ai platform (**macOS & Windows**), built
-with **Tauri v2**. A **thin native wrapper** that connects to a customer's
-**self-hosted Prisme.ai server URL** and loads the web app served by that server.
+Native desktop application for **macOS and Windows**. It connects to your
+Prisme.ai server and gives you the full platform in a dedicated app window,
+with native notifications, downloads, voice input and automatic updates.
 
-> This is the **Tauri** counterpart to the Electron POC (which lived in the
-> platform monorepo under `services/platform-desktop`). Kept as its **own repo**
-> on purpose — a desktop client is a distinct, distributable product with its
-> own release cadence, signing/store pipeline and macOS+Windows CI. This is how
-> Mattermost ships its desktop client (`mattermost/desktop`, separate from the
-> server/webapp repo).
+## How it works
 
-## Why thin shell
+On first launch, enter the URL of your Prisme.ai server
+(e.g. `https://prisme.your-company.com`). The app loads the platform from that
+server and remembers the URL for next launches. Because the interface is served
+by your own server, the app always stays in sync with your platform version.
 
-Prisme.ai is sold self-hosted: every customer runs their own server on their own
-release cadence. The shell **loads the SPA from the customer's server** (they
-enter `https://prisme.their-company.com` on first launch) instead of bundling
-it, so the UI is always in sync with their backend and **one installer works for
-every customer, whatever their version**. Auth (OIDC + httpOnly cookie) is
-same-domain navigation inside the window, so login works like in a browser.
+Sign-in works exactly as it does in the browser (OIDC + secure session).
 
-## Architecture
+## Features
 
-```
-src/                 setup screen (Vite + vanilla TS) — the trusted local UI
-  main.ts            connect logic + local-filesystem demo
-  styles.css
-index.html
-src-tauri/           Rust side
-  src/lib.rs         commands: server URL persistence + local read/write
-  tauri.conf.json    product name, window, bundle/icons
-  capabilities/      ACL — granted to the "main" (setup) window ONLY
-  icons/             app icons generated from the Prisme emblem
-```
+- Connect to any Prisme.ai server by URL
+- Native desktop notifications
+- File downloads saved to your system Downloads folder
+- Microphone access for voice input
+- Deep links (`prisme://`)
+- Automatic, signed updates
 
-**Security model.** On connect, the app opens a **second window** (label `app`)
-pointed at the remote server URL and closes the setup window. That remote window
-is **not listed in any capability**, so under Tauri's deny-by-default ACL the
-remote content gets **no access to any Rust command or plugin** — the same
-isolation as the Electron build's "no preload on remote content".
+## Requirements
 
-## Local filesystem access (desktop-only capability)
+- [Node.js](https://nodejs.org) 22
+- [Rust](https://www.rust-lang.org/tools/install) (stable toolchain)
 
-The setup screen has two buttons proving what a desktop app can do that the web
-app cannot:
-
-- **Read a document…** — native file picker → reads the file locally, shows its
-  size (`read_file_info` in Rust, `std::fs`).
-- **Write a test file…** — native save dialog → writes a file to disk
-  (`write_text_file`).
-
-These run in the trusted local window. To let the **remote** SPA use them, you
-would explicitly grant that origin a capability and expose a narrow, audited API
-(never raw fs) — a deliberate, reviewable decision (good fit for banking). Note
-that basic file **upload** (`<input type=file>`) and **download** already work in
-the remote webview with no native code.
-
-## Run locally
-
-Requires Node 22 and the Rust toolchain (`rustup`). Then:
+## Development
 
 ```bash
 npm install
-npm run tauri dev      # launches the app (compiles Rust on first run)
+npm run tauri dev
 ```
 
-Enter a server URL (e.g. `https://studio.prisme.ai`) and sign in as usual.
-
-Build installers (unsigned):
+## Building installers
 
 ```bash
-npm run tauri build    # .dmg/.app (macOS), .msi/.exe (Windows)
+npm run tauri build
 ```
 
-## Tauri vs Electron (why this POC exists)
+Produces a `.dmg`/`.app` on macOS and a `.msi`/`.exe` on Windows under
+`src-tauri/target/release/bundle/`. Signed release builds and the update feed
+are produced by CI (see `.github/workflows/release.yml`).
 
-| | Electron POC | **Tauri v2 POC (this repo)** |
-|---|---|---|
-| Runtime | Bundles Chromium + Node (~150 MB) | Native OS WebView, Rust core (~5–10 MB) |
-| RAM | Higher | ~1/3 of Electron |
-| Backend language | TypeScript (main process) | Rust (commands) |
-| Security ACL | Manual (preload isolation) | Capability system, deny-by-default |
-| Toolchain | Node only | Node + Rust |
+## Security
 
-Both implement the exact same thin-shell topology; the app behaviour is
-identical. Run `npm run tauri build` in each to compare real installer sizes.
+The app window that loads your server runs sandboxed and isolated: remote
+content is granted a single, explicit capability (native notifications) and
+cannot reach the filesystem or other system APIs. Privileged operations are
+restricted to the local connection screen.
 
-## Production TODO
+## Project layout
 
-- Code signing + notarization (Apple Developer ID, Windows EV cert).
-- Auto-update (`tauri-plugin-updater` + release feed).
-- Native polish: notifications, tray, deep links, single-instance.
-- External-IdP auth (RFC 8252 system-browser flow) if customers federate to
-  Azure AD / Okta that block embedded webviews.
+```
+src/            Connection screen (Vite + TypeScript)
+src-tauri/      Native layer (Rust): windows, notifications, downloads,
+                deep links, updater, app icons
+```
+
+## License
+
+MIT — see [LICENSE](./LICENSE).

@@ -1,4 +1,4 @@
-//! Prisme.ai desktop shell (Tauri POC) — Rust side.
+//! Prisme.ai desktop — native layer.
 //!
 //! Thin shell that loads the SPA served by the customer's own self-hosted
 //! server. This file wires the NATIVE features a web page can't get on its own
