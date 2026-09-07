@@ -7,8 +7,6 @@
  * window has no capability entry, so remote content cannot call any command.
  */
 import { invoke } from '@tauri-apps/api/core';
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
 
 const $ = <T extends HTMLElement>(id: string): T =>
@@ -69,22 +67,9 @@ window.addEventListener('DOMContentLoaded', () => {
     button.textContent = 'Connecting…';
     try {
       await invoke('set_server_url', { url: origin });
-      // Open the remote app in its own window (no IPC capability), then close
-      // this setup window.
-      const appWindow = new WebviewWindow('app', {
-        url: origin,
-        title: 'Prisme.ai',
-        width: 1440,
-        height: 900,
-      });
-      appWindow.once('tauri://created', () => {
-        void getCurrentWindow().close();
-      });
-      appWindow.once('tauri://error', (e) => {
-        button.disabled = false;
-        button.textContent = 'Connect';
-        showError(`Could not open ${origin}: ${String(e.payload)}`);
-      });
+      // Rust opens the remote app window (native notifications + downloads) and
+      // closes this setup window.
+      await invoke('open_app_window', { url: origin });
     } catch (err) {
       button.disabled = false;
       button.textContent = 'Connect';
