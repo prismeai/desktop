@@ -26,6 +26,8 @@ tauri-plugin-notification = "2"
 tauri-plugin-deep-link = "2"
 # Route a second launch (deep link) to the already-running instance.
 tauri-plugin-single-instance = "2"
+# Self-update the shell from a signed release feed (latest.json).
+tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

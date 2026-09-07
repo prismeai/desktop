@@ -1,0 +1,40 @@
+name: Build
+
+# Compile-check the app on macOS & Windows for every PR / main push. Uses
+# --no-bundle so it doesn't need signing secrets (no installers produced here).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Typecheck + build frontend
+        run: npm run build
+
+      - name: Build app (no bundle)
+        run: npm run tauri -- build --no-bundle

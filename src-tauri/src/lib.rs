@@ -152,6 +152,25 @@ fn open_app_window(webview: WebviewWindow, url: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Check the release feed for a newer signed build; download, install, restart.
+#[cfg(desktop)]
+async fn check_for_updates(app: tauri::AppHandle) {
+    use tauri_plugin_updater::UpdaterExt;
+    let updater = match app.updater() {
+        Ok(u) => u,
+        Err(_) => return,
+    };
+    if let Ok(Some(update)) = updater.check().await {
+        if update
+            .download_and_install(|_chunk, _total| {}, || {})
+            .await
+            .is_ok()
+        {
+            app.restart();
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -168,6 +187,7 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             #[cfg(desktop)]
             {
@@ -180,6 +200,13 @@ pub fn run() {
                     {
                         let _ = w.set_focus();
                     }
+                });
+
+                // Silent self-update on startup. In dev (or with no reachable
+                // release feed) check() just errors out and is ignored.
+                let updater_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    check_for_updates(updater_handle).await;
                 });
             }
             Ok(())
