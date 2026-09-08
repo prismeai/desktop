@@ -77,7 +77,8 @@ window.addEventListener('DOMContentLoaded', () => {
       await invoke('open_app_window', { url: result.exchangeUrl });
     } catch (err) {
       reset();
-      showError(String(err));
+      // Silent when the user just closed the sign-in sheet.
+      if (String(err) !== '__cancelled__') showError(String(err));
     }
   };
 

@@ -17,6 +17,10 @@ use std::time::Duration;
 /// Timeout for the whole interactive auth (password + MFA).
 const AUTH_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Sentinel returned when the user cancels the sheet (closes it without signing
+/// in). The frontend treats it silently — no error banner, just reset.
+pub const CANCELLED: &str = "__cancelled__";
+
 /// Run the interactive login and return the raw callback URL
 /// (`<scheme>://…?code=…&state=…`).
 pub async fn authenticate(
@@ -49,7 +53,7 @@ async fn baseline(state: &AuthState, start_url: &str) -> Result<String, String> 
     tokio::time::timeout(AUTH_TIMEOUT, rx)
         .await
         .map_err(|_| "Sign-in timed out.".to_string())?
-        .map_err(|_| "Sign-in was cancelled.".to_string())
+        .map_err(|_| CANCELLED.to_string())
 }
 
 #[cfg(target_os = "macos")]
@@ -101,7 +105,9 @@ mod macos {
         }
     }
 
-    /// Read the callback URL (or an error message) from the completion args.
+    /// Read the callback URL (or an error) from the completion args.
+    /// `ASWebAuthenticationSessionErrorCodeCanceledLogin` (== 1) means the user
+    /// closed the sheet — surfaced as the silent CANCELLED sentinel.
     unsafe fn extract(cb_url: *mut NSURL, cb_err: *mut NSError) -> Result<String, String> {
         if !cb_url.is_null() {
             if let Some(abs) = (*cb_url).absoluteString() {
@@ -109,9 +115,14 @@ mod macos {
             }
         }
         if !cb_err.is_null() {
-            return Err((*cb_err).localizedDescription().to_string());
+            let err = &*cb_err;
+            let code: isize = msg_send![err, code];
+            if code == 1 {
+                return Err(super::CANCELLED.to_string());
+            }
+            return Err(err.localizedDescription().to_string());
         }
-        Err("Sign-in was cancelled or failed.".to_string())
+        Err(super::CANCELLED.to_string())
     }
 
     pub(super) async fn run(
@@ -188,7 +199,7 @@ mod macos {
 
         match tokio::time::timeout(AUTH_TIMEOUT, rx).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err("Sign-in was cancelled.".into()),
+            Ok(Err(_)) => Err(super::CANCELLED.to_string()),
             Err(_) => Err("Sign-in timed out.".into()),
         }
     }
