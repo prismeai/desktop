@@ -42,6 +42,19 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # Notarization uses an App Store Connect API key (.p8) — more robust in CI
+      # than an Apple ID + app-specific password (no 2FA prompts). Stored as a
+      # base64 secret, written to a temp file, exposed via APPLE_API_KEY_PATH.
+      - name: Prepare Apple notarization key (macOS)
+        if: matrix.platform == 'macos-latest'
+        env:
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+        run: |
+          if [ -n "$APPLE_API_KEY_P8_BASE64" ]; then
+            echo "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/apple_api_key.p8"
+            echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/apple_api_key.p8" >> "$GITHUB_ENV"
+          fi
+
       - name: Build and release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -49,18 +62,18 @@ jobs:
           # Updater signing — REQUIRED to emit a signed latest.json.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # macOS code signing + notarization (fill in to distribute outside dev).
+          # macOS Developer ID signing (imported into a temp keychain by the action).
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Windows code signing — pick ONE when a certificate is available:
-          #  a) OV/EV cert in the runner's store + bundle.windows.certificateThumbprint
-          #     (import the PFX from a base64 secret in a prior step), or
-          #  b) Azure Trusted Signing via the AZURE_* env + tauri.conf signCommand.
-          # Until then the Windows .msi/.exe ships UNSIGNED (SmartScreen warns).
+          # macOS notarization via App Store Connect API key.
+          # APPLE_API_KEY_PATH is exported by the step above.
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          # Windows signing: recommended = Azure Trusted Signing (cloud, CI-friendly,
+          # no hardware token). Wire via bundle.windows.signCommand + AZURE_* secrets
+          # when the certificate is set up. Until then the .msi/.exe ships unsigned.
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Prisme.ai Desktop ${{ github.ref_name }}'
