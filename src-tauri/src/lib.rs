@@ -15,6 +15,7 @@
 //! content (including third-party auth pages) cannot reach any command.
 
 mod auth;
+mod auth_session;
 
 use std::fs;
 use std::path::PathBuf;
@@ -50,6 +51,22 @@ const NOTIFICATION_SHIM: &str = r#"
   } catch (e) {}
 })();
 "#;
+
+/// Lightweight diagnostic logger → ~/prismeai-desktop.log. Temporary, for
+/// tracing the auth handoff while validating on real machines.
+fn dlog(msg: &str) {
+    if let Some(home) = std::env::var_os("HOME") {
+        use std::io::Write;
+        let path = std::path::Path::new(&home).join("prismeai-desktop.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(f, "{msg}");
+        }
+    }
+}
 
 fn config_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
@@ -95,11 +112,19 @@ async fn sign_in(
     api_root: String,
 ) -> Result<auth::SignInResult, String> {
     ensure_setup(&webview)?;
+    dlog(&format!("=== sign_in start: api_root={api_root} ==="));
     let client = reqwest::Client::new();
 
     let boot = auth::bootstrap(&client, &api_root).await?;
+    dlog(&format!(
+        "bootstrap OK: clientId={} console={} api={}",
+        boot.client_id, boot.console_url, boot.api_url
+    ));
     let (authorization_endpoint, token_endpoint) =
         auth::discovery(&client, &boot.provider_url).await?;
+    dlog(&format!(
+        "discovery OK: authz={authorization_endpoint} token={token_endpoint}"
+    ));
     let (verifier, challenge) = auth::pkce();
     let expected_state = auth::random_b64url(16);
     let authorize_url = auth::build_authorize_url(
@@ -112,15 +137,13 @@ async fn sign_in(
     )?;
 
     // Arm the callback receiver, then open the system browser.
-    let (tx, rx) = tokio::sync::oneshot::channel::<String>();
-    *state.pending.lock().unwrap() = Some(tx);
-    open::that(&authorize_url).map_err(|e| format!("Could not open the browser: {e}"))?;
-
-    // Wait for ai.prisme.app://oauth/callback (5 min).
-    let callback = tokio::time::timeout(std::time::Duration::from_secs(300), rx)
+    // Cross-platform system auth session (see `auth_session`): baseline today,
+    // ASWebAuthenticationSession / WebAuthenticationBroker plug in per-OS.
+    dlog("starting system auth session …");
+    let callback = auth_session::authenticate(state.inner(), &authorize_url, "ai.prisme.app")
         .await
-        .map_err(|_| "Sign-in timed out.".to_string())?
-        .map_err(|_| "Sign-in was cancelled.".to_string())?;
+        .inspect_err(|e| dlog(&format!("auth session error: {e}")))?;
+    dlog("callback received");
 
     let (code, returned_state) =
         auth::parse_callback(&callback).ok_or("Malformed authorization callback.")?;
@@ -138,10 +161,13 @@ async fn sign_in(
     )
     .await?;
 
+    dlog("code exchanged for access token");
+
     // Turn the Bearer into an httpOnly session cookie for the webview: mint a
     // single-use ticket and return its exchange URL. The token never touches JS.
     let exchange_url =
         auth::web_session_url(&client, &boot.api_url, &access_token, &boot.console_url).await?;
+    dlog(&format!("web session ticket OK: exchange_url={exchange_url}"));
 
     Ok(auth::SignInResult { exchange_url })
 }
@@ -233,10 +259,14 @@ pub fn run() {
                     for url in event.urls() {
                         // Route the OAuth callback to the waiting sign-in;
                         // otherwise just bring the app to the front.
-                        auth::deliver_callback(
+                        let consumed = auth::deliver_callback(
                             handle.state::<auth::AuthState>().inner(),
                             url.as_str(),
                         );
+                        dlog(&format!(
+                            "[deeplink] received (consumed_as_callback={consumed}): {}",
+                            url.as_str()
+                        ));
                     }
                     if let Some(w) = handle
                         .get_webview_window("main")
