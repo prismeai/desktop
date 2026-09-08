@@ -56,7 +56,11 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Windows code signing (or set bundle.windows.certificateThumbprint).
+          # Windows code signing — pick ONE when a certificate is available:
+          #  a) OV/EV cert in the runner's store + bundle.windows.certificateThumbprint
+          #     (import the PFX from a base64 secret in a prior step), or
+          #  b) Azure Trusted Signing via the AZURE_* env + tauri.conf signCommand.
+          # Until then the Windows .msi/.exe ships UNSIGNED (SmartScreen warns).
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Prisme.ai Desktop ${{ github.ref_name }}'
