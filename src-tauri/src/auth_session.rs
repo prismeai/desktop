@@ -5,10 +5,9 @@
 //! redirects to `<scheme>://…`.
 //!
 //! By design, every platform routes through `authenticate()`:
-//!   - macOS   → `ASWebAuthenticationSession` (native sheet, AUTO-CLOSES,
-//!               ephemeral) — premium, mobile parity.
-//!   - Windows → `WebAuthenticationBroker`.                             [PLANNED]
-//!   - baseline (Windows/Linux today) → system browser (`open`) + the
+//!   - macOS: `ASWebAuthenticationSession` (native sheet, auto-close, ephemeral).
+//!   - Windows: `WebAuthenticationBroker` [PLANNED].
+//!   - baseline (Windows/Linux today): system browser (`open`) + the
 //!     custom-scheme deep link delivered back via `AuthState`.
 
 use crate::auth::AuthState;
