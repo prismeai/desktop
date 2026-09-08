@@ -194,12 +194,28 @@ fn open_app_window(webview: WebviewWindow, url: String) -> Result<(), String> {
     ensure_setup(&webview)?;
     let parsed = tauri::Url::parse(&url).map_err(|e| e.to_string())?;
     let app = webview.app_handle().clone();
+    let nav_app = app.clone();
 
     WebviewWindowBuilder::new(&app, "app", WebviewUrl::External(parsed))
         .title("Prisme.ai")
         .inner_size(1440.0, 900.0)
         .min_inner_size(800.0, 600.0)
         .initialization_script(NOTIFICATION_SHIM)
+        .on_navigation(move |url| {
+            // When the SPA logs out it navigates to the web login (which can't
+            // do Google SSO in a webview). Intercept it and return to the native
+            // connection screen so the user re-signs in via the system sheet.
+            let path = url.path();
+            let logged_out = path.contains("/oidc/session/end")
+                || path.ends_with("/signin")
+                || path.ends_with("/logout");
+            if logged_out {
+                let app_cb = nav_app.clone();
+                let _ = nav_app.run_on_main_thread(move || show_connect_window(&app_cb));
+                return false; // don't load the web login inside the app window
+            }
+            true
+        })
         .on_download(|webview, event| {
             // Redirect downloads to the OS Downloads folder, keeping the name.
             if let DownloadEvent::Requested { destination, .. } = event {
@@ -218,6 +234,25 @@ fn open_app_window(webview: WebviewWindow, url: String) -> Result<(), String> {
         let _ = main.close();
     }
     Ok(())
+}
+
+/// Return to the native connection screen: (re)create the setup window and
+/// close the remote app window. Used on logout so the user re-signs in via the
+/// system auth sheet instead of the SPA's in-webview login.
+fn show_connect_window(app: &tauri::AppHandle) {
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.set_focus();
+    } else {
+        let _ = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+            .title("Prisme.ai")
+            .inner_size(520.0, 640.0)
+            .resizable(false)
+            .build();
+    }
+    if let Some(appw) = app.get_webview_window("app") {
+        let _ = appw.close();
+    }
 }
 
 /// Check the release feed for a newer signed build; download, install, restart.
