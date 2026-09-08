@@ -3,12 +3,11 @@
 //! Thin shell that loads the SPA served by the customer's own self-hosted
 //! server. This file wires the native features a web page can't get on its own
 //! inside a system WebView:
-//!   - server URL persistence
-//!   - the remote "app" window, created here so we can attach:
-//!       * a no-op Notification stub (WKWebView has no web Notification API)
-//!       * a download handler (saves to the OS Downloads folder)
-//!   - native OIDC sign-in via the system browser (see `auth`)
-//!   - deep links (ai.prisme.app://oauth/callback) + single-instance
+//!   - server URL + console URL persistence (session reuse across launches)
+//!   - native OIDC sign-in via the system auth session (see `auth_session`)
+//!   - the remote "app" window (notification stub, download handler, logout
+//!     detection)
+//!   - deep links (ai.prisme.app://oauth/callback) + single-instance + updater
 //!
 //! Security: sensitive custom commands are guarded to the trusted "main"
 //! window. The remote "app" window is granted no IPC capability, so remote
@@ -25,17 +24,15 @@ use tauri::{Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct Config {
     server_url: Option<String>,
+    /// Console URL of the last successful sign-in. When set, the next launch
+    /// reuses the existing session by opening the app directly.
+    console_url: Option<String>,
 }
 
 /// Injected into the remote app window BEFORE its page loads.
 ///
 /// WKWebView (macOS) does not implement the web Notification API, so we provide
-/// a harmless no-op stub for `window.Notification` (reports "granted", does
-/// nothing). It deliberately performs NO IPC: this same webview navigates to
-/// third-party auth pages (e.g. accounts.google.com), where any `ipc://` call
-/// is blocked by WebKit as insecure mixed content. Native notifications will be
-/// re-introduced with an origin-scoped capability bound to the customer's
-/// server origin only.
+/// a harmless no-op stub for `window.Notification`. It performs NO IPC.
 const NOTIFICATION_SHIM: &str = r#"
 (function () {
   if (window.__prismeNotifShim) return;
@@ -52,26 +49,40 @@ const NOTIFICATION_SHIM: &str = r#"
 })();
 "#;
 
-/// Lightweight diagnostic logger → ~/prismeai-desktop.log. Temporary, for
-/// tracing the auth handoff while validating on real machines.
-fn dlog(msg: &str) {
-    if let Some(home) = std::env::var_os("HOME") {
-        use std::io::Write;
-        let path = std::path::Path::new(&home).join("prismeai-desktop.log");
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        {
-            let _ = writeln!(f, "{msg}");
-        }
-    }
-}
-
 fn config_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.join("config.json"))
+}
+
+fn read_config(app: &tauri::AppHandle) -> Config {
+    config_path(app)
+        .ok()
+        .and_then(|p| fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn write_config(app: &tauri::AppHandle, cfg: &Config) -> Result<(), String> {
+    let path = config_path(app)?;
+    let json = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    fs::write(path, json).map_err(|e| e.to_string())
+}
+
+fn get_console_url(app: &tauri::AppHandle) -> Option<String> {
+    read_config(app).console_url
+}
+
+fn set_console_url(app: &tauri::AppHandle, url: &str) {
+    let mut cfg = read_config(app);
+    cfg.console_url = Some(url.to_string());
+    let _ = write_config(app, &cfg);
+}
+
+fn clear_console_url(app: &tauri::AppHandle) {
+    let mut cfg = read_config(app);
+    cfg.console_url = None;
+    let _ = write_config(app, &cfg);
 }
 
 /// Only the trusted local setup window may call the privileged commands.
@@ -86,25 +97,20 @@ fn ensure_setup(webview: &WebviewWindow) -> Result<(), String> {
 #[tauri::command]
 fn get_server_url(webview: WebviewWindow) -> Option<String> {
     ensure_setup(&webview).ok()?;
-    let path = config_path(&webview.app_handle()).ok()?;
-    let data = fs::read_to_string(path).ok()?;
-    let cfg: Config = serde_json::from_str(&data).ok()?;
-    cfg.server_url
+    read_config(webview.app_handle()).server_url
 }
 
 #[tauri::command]
 fn set_server_url(webview: WebviewWindow, url: String) -> Result<(), String> {
     ensure_setup(&webview)?;
-    let path = config_path(&webview.app_handle())?;
-    let cfg = Config {
-        server_url: Some(url),
-    };
-    let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    fs::write(path, json).map_err(|e| e.to_string())
+    let app = webview.app_handle();
+    let mut cfg = read_config(app);
+    cfg.server_url = Some(url);
+    write_config(app, &cfg)
 }
 
-/// Native OIDC sign-in via the system browser. Returns the Bearer access token
-/// and the console URL to load. See `auth` for the full flow.
+/// Native OIDC sign-in via the system auth session; returns the web-session
+/// exchange URL to open in the app window. See `auth`.
 #[tauri::command]
 async fn sign_in(
     webview: WebviewWindow,
@@ -112,19 +118,11 @@ async fn sign_in(
     api_root: String,
 ) -> Result<auth::SignInResult, String> {
     ensure_setup(&webview)?;
-    dlog(&format!("=== sign_in start: api_root={api_root} ==="));
     let client = reqwest::Client::new();
 
     let boot = auth::bootstrap(&client, &api_root).await?;
-    dlog(&format!(
-        "bootstrap OK: clientId={} console={} api={}",
-        boot.client_id, boot.console_url, boot.api_url
-    ));
     let (authorization_endpoint, token_endpoint) =
         auth::discovery(&client, &boot.provider_url).await?;
-    dlog(&format!(
-        "discovery OK: authz={authorization_endpoint} token={token_endpoint}"
-    ));
     let (verifier, challenge) = auth::pkce();
     let expected_state = auth::random_b64url(16);
     let authorize_url = auth::build_authorize_url(
@@ -136,19 +134,14 @@ async fn sign_in(
         &challenge,
     )?;
 
-    // Arm the callback receiver, then open the system browser.
-    // Cross-platform system auth session (see `auth_session`): baseline today,
-    // ASWebAuthenticationSession / WebAuthenticationBroker plug in per-OS.
-    dlog("starting system auth session …");
+    // Cross-platform system auth session (see `auth_session`).
     let callback = auth_session::authenticate(
         webview.app_handle(),
         state.inner(),
         &authorize_url,
         "ai.prisme.app",
     )
-    .await
-    .inspect_err(|e| dlog(&format!("auth session error: {e}")))?;
-    dlog("callback received");
+    .await?;
 
     let (code, returned_state) =
         auth::parse_callback(&callback).ok_or("Malformed authorization callback.")?;
@@ -166,37 +159,33 @@ async fn sign_in(
     )
     .await?;
 
-    dlog("code exchanged for access token");
-
     // Turn the Bearer into an httpOnly session cookie for the webview: mint a
     // single-use ticket and return its exchange URL. The token never touches JS.
     let exchange_url =
         auth::web_session_url(&client, &boot.api_url, &access_token, &boot.console_url).await?;
-    dlog(&format!("web session ticket OK: exchange_url={exchange_url}"));
+
+    // Remember the console URL so the next launch can reuse the session.
+    set_console_url(webview.app_handle(), &boot.console_url);
 
     Ok(auth::SignInResult { exchange_url })
 }
 
-/// Abort an in-flight sign-in: dropping the pending callback sender makes the
-/// awaiting `sign_in` resolve with a "cancelled" error, so the UI can reset
-/// instead of spinning forever (e.g. the browser handoff never returned).
+/// Abort an in-flight sign-in (baseline path): dropping the pending callback
+/// sender makes the awaiting `sign_in` resolve with the cancel sentinel.
 #[tauri::command]
 fn cancel_sign_in(state: tauri::State<'_, auth::AuthState>) {
     let _ = state.pending.lock().unwrap().take();
 }
 
-/// Open the remote server in its own window, then close the setup window.
-/// `url` is the web-session exchange URL: loading it sets the httpOnly session
-/// cookie in the webview and redirects to the console (no token in JS). Created
-/// from Rust so we can attach the notification stub + download handler.
-#[tauri::command]
-fn open_app_window(webview: WebviewWindow, url: String) -> Result<(), String> {
-    ensure_setup(&webview)?;
-    let parsed = tauri::Url::parse(&url).map_err(|e| e.to_string())?;
-    let app = webview.app_handle().clone();
+/// Build the remote "app" window: loads `url`, injects the notification stub,
+/// routes downloads to the OS Downloads folder, and returns to the connection
+/// screen when the SPA logs out. Shared by the sign-in command and the
+/// session-reuse path at startup.
+fn build_app_window(app: &tauri::AppHandle, url: &str) -> Result<(), String> {
+    let parsed = tauri::Url::parse(url).map_err(|e| e.to_string())?;
     let nav_app = app.clone();
 
-    WebviewWindowBuilder::new(&app, "app", WebviewUrl::External(parsed))
+    WebviewWindowBuilder::new(app, "app", WebviewUrl::External(parsed))
         .title("Prisme.ai")
         .inner_size(1440.0, 900.0)
         .min_inner_size(800.0, 600.0)
@@ -204,7 +193,7 @@ fn open_app_window(webview: WebviewWindow, url: String) -> Result<(), String> {
         .on_navigation(move |url| {
             // When the SPA logs out it navigates to the web login (which can't
             // do Google SSO in a webview). Intercept it and return to the native
-            // connection screen so the user re-signs in via the system sheet.
+            // connection screen so the user re-signs in via the system session.
             let path = url.path();
             let logged_out = path.contains("/oidc/session/end")
                 || path.ends_with("/signin")
@@ -217,7 +206,6 @@ fn open_app_window(webview: WebviewWindow, url: String) -> Result<(), String> {
             true
         })
         .on_download(|webview, event| {
-            // Redirect downloads to the OS Downloads folder, keeping the name.
             if let DownloadEvent::Requested { destination, .. } = event {
                 if let (Ok(dir), Some(name)) =
                     (webview.path().download_dir(), destination.file_name())
@@ -229,7 +217,16 @@ fn open_app_window(webview: WebviewWindow, url: String) -> Result<(), String> {
         })
         .build()
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
 
+/// Open the remote server in its own window, then close the setup window.
+/// `url` is the web-session exchange URL (sets the httpOnly cookie + redirects).
+#[tauri::command]
+fn open_app_window(webview: WebviewWindow, url: String) -> Result<(), String> {
+    ensure_setup(&webview)?;
+    let app = webview.app_handle().clone();
+    build_app_window(&app, &url)?;
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.close();
     }
@@ -237,9 +234,10 @@ fn open_app_window(webview: WebviewWindow, url: String) -> Result<(), String> {
 }
 
 /// Return to the native connection screen: (re)create the setup window and
-/// close the remote app window. Used on logout so the user re-signs in via the
-/// system auth sheet instead of the SPA's in-webview login.
+/// close the remote app window. Clears the stored console URL so the next
+/// launch does not try to reuse the (now ended) session.
 fn show_connect_window(app: &tauri::AppHandle) {
+    clear_console_url(app);
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.show();
         let _ = main.set_focus();
@@ -294,19 +292,22 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
+
+                // Windows/Linux use the browser + deep-link baseline, so the
+                // custom scheme must be registered at runtime (macOS uses
+                // ASWebAuthenticationSession + Info.plist, no registration).
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let _ = app.deep_link().register("ai.prisme.app");
+                }
+
                 let handle = app.handle().clone();
                 app.deep_link().on_open_url(move |event| {
                     for url in event.urls() {
-                        // Route the OAuth callback to the waiting sign-in;
-                        // otherwise just bring the app to the front.
-                        let consumed = auth::deliver_callback(
+                        auth::deliver_callback(
                             handle.state::<auth::AuthState>().inner(),
                             url.as_str(),
                         );
-                        dlog(&format!(
-                            "[deeplink] received (consumed_as_callback={consumed}): {}",
-                            url.as_str()
-                        ));
                     }
                     if let Some(w) = handle
                         .get_webview_window("main")
@@ -316,8 +317,17 @@ pub fn run() {
                     }
                 });
 
-                // Silent self-update on startup. In dev (or with no reachable
-                // release feed) check() just errors out and is ignored.
+                // Session reuse: if a previous sign-in stored the console URL,
+                // open the app directly. If the session is stale the SPA bounces
+                // to /signin and on_navigation returns to the connection screen.
+                if let Some(console) = get_console_url(app.handle()) {
+                    if build_app_window(app.handle(), &console).is_ok() {
+                        if let Some(main) = app.get_webview_window("main") {
+                            let _ = main.close();
+                        }
+                    }
+                }
+
                 let updater_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     check_for_updates(updater_handle).await;
