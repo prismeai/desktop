@@ -145,6 +145,14 @@ async fn sign_in(
     })
 }
 
+/// Abort an in-flight sign-in: dropping the pending callback sender makes the
+/// awaiting `sign_in` resolve with a "cancelled" error, so the UI can reset
+/// instead of spinning forever (e.g. the browser handoff never returned).
+#[tauri::command]
+fn cancel_sign_in(state: tauri::State<'_, auth::AuthState>) {
+    let _ = state.pending.lock().unwrap().take();
+}
+
 /// Open the remote server in its own window and hand it the Bearer token (the
 /// SPA reads `platform-token` when `window.__PRISME_DESKTOP__` is set), then
 /// close the setup window. Created from Rust so we can attach handlers.
@@ -261,6 +269,7 @@ pub fn run() {
             get_server_url,
             set_server_url,
             sign_in,
+            cancel_sign_in,
             open_app_window
         ])
         .run(tauri::generate_context!())

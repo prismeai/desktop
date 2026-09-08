@@ -157,6 +157,13 @@ body {
   color: hsl(var(--destructive));
 }
 
+.hint {
+  margin: 12px 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: hsl(var(--muted-foreground));
+}
+
 .btn {
   width: 100%;
   margin-top: 20px;

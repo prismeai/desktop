@@ -29,10 +29,21 @@ window.addEventListener('DOMContentLoaded', () => {
   const input = $<HTMLInputElement>('server-url');
   const button = $<HTMLButtonElement>('connect-btn');
   const error = $<HTMLParagraphElement>('error');
+  const hint = $<HTMLParagraphElement>('hint');
+
+  let signing = false;
 
   const showError = (msg: string): void => {
     error.textContent = msg;
     error.hidden = false;
+  };
+
+  const reset = (): void => {
+    signing = false;
+    input.disabled = false;
+    button.disabled = false;
+    button.textContent = 'Connect';
+    hint.hidden = true;
   };
 
   // Prefill with the last-used server.
@@ -40,37 +51,47 @@ window.addEventListener('DOMContentLoaded', () => {
     if (prev) input.value = prev;
   });
 
-  const connect = async (): Promise<void> => {
+  const startSignIn = async (): Promise<void> => {
     error.hidden = true;
     const origin = normalizeServerUrl(input.value);
     if (!origin) {
       showError('Please enter a valid server URL.');
       return;
     }
-    button.disabled = true;
-    button.textContent = 'Signing in…';
+    // Enter signing state — the button becomes "Cancel" so the user is never
+    // stuck if the browser handoff doesn't return (e.g. unregistered scheme).
+    signing = true;
+    input.disabled = true;
+    button.textContent = 'Cancel';
+    hint.hidden = false;
     try {
       await invoke('set_server_url', { url: origin });
-      // Native OIDC in the system browser; resolves once the callback returns.
       const result = await invoke<{ accessToken: string; consoleUrl: string }>(
         'sign_in',
         { apiRoot: origin }
       );
+      button.disabled = true;
       button.textContent = 'Opening…';
+      hint.hidden = true;
       await invoke('open_app_window', {
         url: result.consoleUrl,
         token: result.accessToken,
       });
     } catch (err) {
-      button.disabled = false;
-      button.textContent = 'Connect';
+      reset();
       showError(String(err));
     }
   };
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    void connect();
+    if (signing) {
+      // Cancel: dropping the Rust-side sender rejects the pending sign_in,
+      // which lands in the catch above and resets the UI.
+      void invoke('cancel_sign_in');
+      return;
+    }
+    void startSignIn();
   });
   input.addEventListener('input', () => (error.hidden = true));
 });
