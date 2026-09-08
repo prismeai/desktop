@@ -317,3 +317,136 @@ pub async fn web_session_url(
         .map_err(|e| format!("Unreadable web session ticket response: {e}"))?;
     Ok(ticket.url)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn is_b64url(s: &str) -> bool {
+        !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    }
+
+    #[test]
+    fn pkce_is_s256_and_url_safe() {
+        let (verifier, challenge) = pkce();
+        assert!(is_b64url(&verifier), "verifier must be base64url");
+        assert!(is_b64url(&challenge), "challenge must be base64url");
+        // 32 random bytes -> 43 base64url chars (no padding).
+        assert_eq!(verifier.len(), 43);
+        // challenge == base64url(SHA256(verifier))
+        let mut hasher = Sha256::new();
+        hasher.update(verifier.as_bytes());
+        assert_eq!(challenge, b64url(&hasher.finalize()));
+    }
+
+    #[test]
+    fn random_b64url_has_expected_shape() {
+        let s = random_b64url(16);
+        assert!(is_b64url(&s));
+        assert_eq!(s.len(), 22); // 16 bytes -> 22 base64url chars
+        assert_ne!(random_b64url(16), random_b64url(16)); // not constant
+    }
+
+    #[test]
+    fn requested_scopes_defaults_when_empty() {
+        let scopes = requested_scopes(&[]);
+        for s in ["openid", "profile", "email", "offline_access"] {
+            assert!(scopes.contains(&s.to_string()), "missing default {s}");
+        }
+        for s in RESOURCE_SCOPES {
+            assert!(scopes.contains(&s.to_string()), "missing resource {s}");
+        }
+        assert_eq!(scopes.len(), 4 + RESOURCE_SCOPES.len());
+    }
+
+    #[test]
+    fn requested_scopes_dedupes_and_keeps_advertised_first() {
+        let advertised = vec!["openid".to_string(), "settings".to_string()];
+        let scopes = requested_scopes(&advertised);
+        assert_eq!(&scopes[0], "openid");
+        assert_eq!(&scopes[1], "settings");
+        // "settings" is both advertised and a resource scope — must appear once.
+        assert_eq!(scopes.iter().filter(|s| *s == "settings").count(), 1);
+        // advertised(2) + resource(7) - overlap(1) = 8
+        assert_eq!(scopes.len(), 8);
+    }
+
+    #[test]
+    fn parse_callback_extracts_code_and_state() {
+        let (code, state) =
+            parse_callback("ai.prisme.app://oauth/callback?code=abc123&state=xyz789").unwrap();
+        assert_eq!(code, "abc123");
+        assert_eq!(state, "xyz789");
+    }
+
+    #[test]
+    fn parse_callback_url_decodes_and_ignores_order_and_extras() {
+        let (code, state) = parse_callback(
+            "ai.prisme.app://oauth/callback?state=a%2Fb&iss=whatever&code=c%3Dd",
+        )
+        .unwrap();
+        assert_eq!(code, "c=d");
+        assert_eq!(state, "a/b");
+    }
+
+    #[test]
+    fn parse_callback_rejects_missing_fields() {
+        assert!(parse_callback("ai.prisme.app://oauth/callback?code=only").is_none());
+        assert!(parse_callback("ai.prisme.app://oauth/callback?state=only").is_none());
+        assert!(parse_callback("ai.prisme.app://oauth/callback").is_none());
+    }
+
+    #[test]
+    fn discovery_url_lives_under_oidc_prefix() {
+        assert_eq!(
+            discovery_url("https://api.sandbox.prisme.ai"),
+            "https://api.sandbox.prisme.ai/oidc/.well-known/openid-configuration"
+        );
+        // trailing slash must not double up
+        assert_eq!(
+            discovery_url("https://api.sandbox.prisme.ai/"),
+            "https://api.sandbox.prisme.ai/oidc/.well-known/openid-configuration"
+        );
+    }
+
+    #[test]
+    fn authorize_url_carries_all_pkce_params() {
+        let url = build_authorize_url(
+            "https://api.sandbox.prisme.ai/oidc/auth",
+            "ai.prisme.app",
+            &["openid".to_string(), "settings".to_string()],
+            "https://api.sandbox.prisme.ai/v2",
+            "STATE",
+            "CHALLENGE",
+        )
+        .unwrap();
+        let parsed = tauri::Url::parse(&url).unwrap();
+        let q: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+        assert_eq!(q["client_id"], "ai.prisme.app");
+        assert_eq!(q["response_type"], "code");
+        assert_eq!(q["redirect_uri"], REDIRECT_URI);
+        assert_eq!(q["scope"], "openid settings");
+        assert_eq!(q["state"], "STATE");
+        assert_eq!(q["code_challenge"], "CHALLENGE");
+        assert_eq!(q["code_challenge_method"], "S256");
+        assert_eq!(q["resource"], "https://api.sandbox.prisme.ai/v2");
+    }
+
+    #[test]
+    fn deliver_callback_routes_only_matching_urls() {
+        // matching URL is delivered to the waiting receiver
+        let state = AuthState::default();
+        let (tx, mut rx) = oneshot::channel::<String>();
+        *state.pending.lock().unwrap() = Some(tx);
+        let cb = "ai.prisme.app://oauth/callback?code=c&state=s";
+        assert!(deliver_callback(&state, cb));
+        assert_eq!(rx.try_recv().unwrap(), cb);
+
+        // an unrelated deep link is not consumed
+        let state2 = AuthState::default();
+        let (tx2, _rx2) = oneshot::channel::<String>();
+        *state2.pending.lock().unwrap() = Some(tx2);
+        assert!(!deliver_callback(&state2, "https://example.com/whatever"));
+        assert!(state2.pending.lock().unwrap().is_some());
+    }
+}
