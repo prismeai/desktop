@@ -66,17 +66,15 @@ window.addEventListener('DOMContentLoaded', () => {
     hint.hidden = false;
     try {
       await invoke('set_server_url', { url: origin });
-      const result = await invoke<{ accessToken: string; consoleUrl: string }>(
-        'sign_in',
-        { apiRoot: origin }
-      );
+      const result = await invoke<{ exchangeUrl: string }>('sign_in', {
+        apiRoot: origin,
+      });
       button.disabled = true;
       button.textContent = 'Opening…';
       hint.hidden = true;
-      await invoke('open_app_window', {
-        url: result.consoleUrl,
-        token: result.accessToken,
-      });
+      // The exchange URL sets the httpOnly session cookie in the webview and
+      // redirects to the console — no token handled by the page.
+      await invoke('open_app_window', { url: result.exchangeUrl });
     } catch (err) {
       reset();
       showError(String(err));

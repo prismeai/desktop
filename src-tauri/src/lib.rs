@@ -128,7 +128,7 @@ async fn sign_in(
         return Err("State mismatch — sign-in aborted for safety.".into());
     }
 
-    let (access_token, refresh_token) = auth::exchange(
+    let (access_token, _refresh_token) = auth::exchange(
         &client,
         &token_endpoint,
         &code,
@@ -138,11 +138,12 @@ async fn sign_in(
     )
     .await?;
 
-    Ok(auth::SignInResult {
-        access_token,
-        console_url: boot.console_url,
-        refresh_token,
-    })
+    // Turn the Bearer into an httpOnly session cookie for the webview: mint a
+    // single-use ticket and return its exchange URL. The token never touches JS.
+    let exchange_url =
+        auth::web_session_url(&client, &boot.api_url, &access_token, &boot.console_url).await?;
+
+    Ok(auth::SignInResult { exchange_url })
 }
 
 /// Abort an in-flight sign-in: dropping the pending callback sender makes the
@@ -153,32 +154,21 @@ fn cancel_sign_in(state: tauri::State<'_, auth::AuthState>) {
     let _ = state.pending.lock().unwrap().take();
 }
 
-/// Open the remote server in its own window and hand it the Bearer token (the
-/// SPA reads `platform-token` when `window.__PRISME_DESKTOP__` is set), then
-/// close the setup window. Created from Rust so we can attach handlers.
+/// Open the remote server in its own window, then close the setup window.
+/// `url` is the web-session exchange URL: loading it sets the httpOnly session
+/// cookie in the webview and redirects to the console (no token in JS). Created
+/// from Rust so we can attach the notification stub + download handler.
 #[tauri::command]
-fn open_app_window(
-    webview: WebviewWindow,
-    url: String,
-    token: Option<String>,
-) -> Result<(), String> {
+fn open_app_window(webview: WebviewWindow, url: String) -> Result<(), String> {
     ensure_setup(&webview)?;
     let parsed = tauri::Url::parse(&url).map_err(|e| e.to_string())?;
     let app = webview.app_handle().clone();
-
-    let mut init = NOTIFICATION_SHIM.to_string();
-    if let Some(token) = token {
-        let literal = serde_json::to_string(&token).unwrap_or_else(|_| "\"\"".into());
-        init.push_str(&format!(
-            "\nwindow.__PRISME_DESKTOP__ = true; try {{ localStorage.setItem('platform-token', {literal}); }} catch (e) {{}}"
-        ));
-    }
 
     WebviewWindowBuilder::new(&app, "app", WebviewUrl::External(parsed))
         .title("Prisme.ai")
         .inner_size(1440.0, 900.0)
         .min_inner_size(800.0, 600.0)
-        .initialization_script(&init)
+        .initialization_script(NOTIFICATION_SHIM)
         .on_download(|webview, event| {
             // Redirect downloads to the OS Downloads folder, keeping the name.
             if let DownloadEvent::Requested { destination, .. } = event {

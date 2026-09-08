@@ -87,13 +87,19 @@ struct TokenResponse {
     refresh_token: Option<String>,
 }
 
-/// Everything the connection screen needs after a successful sign-in.
+#[derive(Deserialize)]
+struct WebSessionTicketResponse {
+    url: String,
+}
+
+/// What the connection screen needs after a successful sign-in: the single-use
+/// exchange URL to open in the webview. Loading it burns the ticket, sets the
+/// httpOnly `access-token` cookie IN THE WEBVIEW, and redirects to the console.
+/// No token ever reaches the page's JS.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SignInResult {
-    pub access_token: String,
-    pub console_url: String,
-    pub refresh_token: Option<String>,
+    pub exchange_url: String,
 }
 
 pub struct Bootstrap {
@@ -279,4 +285,35 @@ pub async fn exchange(
         .await
         .map_err(|e| format!("Unreadable token response: {e}"))?;
     Ok((tokens.access_token, tokens.refresh_token))
+}
+
+/// Mint a single-use web-session ticket from the Bearer token and return the
+/// exchange URL (`{apiUrl}/user/webSession?ticket=…`). Opening that URL in the
+/// webview sets the httpOnly session cookie and redirects to `redirect`.
+/// Mirrors the mobile client (`PrismeClient.webSessionURL`, platform #154).
+/// The bearer never transits in a URL — only the opaque ticket does.
+pub async fn web_session_url(
+    client: &reqwest::Client,
+    api_url: &str,
+    access_token: &str,
+    redirect: &str,
+) -> Result<String, String> {
+    let endpoint = format!("{}/user/webSessionTicket", api_url.trim_end_matches('/'));
+    let resp = client
+        .post(&endpoint)
+        .bearer_auth(access_token)
+        .json(&serde_json::json!({ "redirect": redirect }))
+        .send()
+        .await
+        .map_err(|e| format!("Web session ticket request failed: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Web session ticket rejected (HTTP {status}): {body}"));
+    }
+    let ticket: WebSessionTicketResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("Unreadable web session ticket response: {e}"))?;
+    Ok(ticket.url)
 }
