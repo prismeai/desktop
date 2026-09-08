@@ -1,26 +1,34 @@
 # Prisme.ai Desktop
 
-Native desktop application for **macOS and Windows**. It connects to your
-Prisme.ai server and gives you the full platform in a dedicated app window,
-with native notifications, downloads, voice input and automatic updates.
+Native desktop app for **macOS and Windows**. It connects to your self-hosted
+Prisme.ai server and runs the platform in a dedicated window — with native
+sign-in, downloads to your Downloads folder, session reuse across launches, and
+signed automatic updates.
 
 ## How it works
 
-On first launch, enter the URL of your Prisme.ai server
-(e.g. `https://prisme.your-company.com`). The app loads the platform from that
-server and remembers the URL for next launches. Because the interface is served
-by your own server, the app always stays in sync with your platform version.
+The app is a **thin native shell**: it loads the web app served by *your*
+Prisme.ai server, so the UI always matches your server's version. On first
+launch you enter your server's **API URL** (e.g. `https://api.your-company.com`);
+it's remembered for next time.
 
-Sign-in works exactly as it does in the browser (OIDC + secure session).
+Sign-in is native and standards-based (**OAuth 2.0 + PKCE, RFC 8252**):
+
+- **macOS** — a system authentication sheet (`ASWebAuthenticationSession`): full
+  SSO (Google / Microsoft / …) and MFA, and it closes itself when done.
+- **Windows** — your system browser + a secure app callback (`ai.prisme.app://`).
+
+No token is ever exposed to the web page: after sign-in the shell establishes an
+**httpOnly session cookie** in the app window (via the server's web-session
+endpoint). Logging out returns you to the native connection screen.
 
 ## Features
 
-- Connect to any Prisme.ai server by URL
-- Native desktop notifications
-- File downloads saved to your system Downloads folder
-- Microphone access for voice input
-- Deep links (`prisme://`)
-- Automatic, signed updates
+- Connect to any self-hosted Prisme.ai server
+- Native SSO + MFA sign-in via the OS auth session
+- Session reuse across launches (no re-login until the session expires)
+- Downloads saved to your system Downloads folder
+- Signed automatic updates
 
 ## Requirements
 
@@ -34,29 +42,38 @@ npm install
 npm run tauri dev
 ```
 
-## Building installers
+## Building
 
 ```bash
 npm run tauri build
 ```
 
-Produces a `.dmg`/`.app` on macOS and a `.msi`/`.exe` on Windows under
-`src-tauri/target/release/bundle/`. Signed release builds and the update feed
-are produced by CI (see `.github/workflows/release.yml`).
+Produces a `.dmg`/`.app` (macOS) and `.msi`/`.exe` (Windows) under
+`src-tauri/target/release/bundle/`. Signed, notarized release builds and the
+update feed are produced by CI on a version tag — see **[RELEASING.md](./RELEASING.md)**.
 
 ## Security
 
-The app window that loads your server runs sandboxed and isolated: remote
-content is granted a single, explicit capability (native notifications) and
-cannot reach the filesystem or other system APIs. Privileged operations are
-restricted to the local connection screen.
+- The window that loads your server runs sandboxed/isolated with **no IPC
+  capability**: remote content cannot reach the filesystem or any native command.
+- Privileged commands are restricted to the local connection screen.
+- Auth runs in the OS-managed session; the access token **never touches page JS**
+  (httpOnly cookie).
+
+## Platform status
+
+- **macOS** — complete: native auth sheet, notarization-ready.
+- **Windows** — functional via system browser + app callback; native broker
+  (`WebAuthenticationBroker`) and code signing are being finalized (see RELEASING.md).
 
 ## Project layout
 
 ```
 src/            Connection screen (Vite + TypeScript)
-src-tauri/      Native layer (Rust): windows, notifications, downloads,
-                deep links, updater, app icons
+src-tauri/      Native layer (Rust):
+  auth.rs           OIDC (bootstrap, discovery, PKCE, token, webSession)
+  auth_session.rs   per-OS system auth session (macOS ASWebAuthenticationSession)
+  lib.rs            windows, commands, session reuse, downloads, updater
 ```
 
 ## License
