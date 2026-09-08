@@ -33,6 +33,12 @@ open = "5"
 tokio = { version = "1", features = ["sync", "time"] }
 urlencoding = "2"
 
+# macOS: ASWebAuthenticationSession (native auth sheet, auto-close, ephemeral).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "=0.5.2"
+objc2-foundation = { version = "=0.2.2", features = ["NSString", "NSURL", "NSError"] }
+block2 = "=0.5.1"
+
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 codegen-units = 1

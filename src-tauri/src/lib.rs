@@ -140,9 +140,14 @@ async fn sign_in(
     // Cross-platform system auth session (see `auth_session`): baseline today,
     // ASWebAuthenticationSession / WebAuthenticationBroker plug in per-OS.
     dlog("starting system auth session …");
-    let callback = auth_session::authenticate(state.inner(), &authorize_url, "ai.prisme.app")
-        .await
-        .inspect_err(|e| dlog(&format!("auth session error: {e}")))?;
+    let callback = auth_session::authenticate(
+        webview.app_handle(),
+        state.inner(),
+        &authorize_url,
+        "ai.prisme.app",
+    )
+    .await
+    .inspect_err(|e| dlog(&format!("auth session error: {e}")))?;
     dlog("callback received");
 
     let (code, returned_state) =
