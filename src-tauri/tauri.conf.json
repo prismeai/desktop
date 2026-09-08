@@ -27,7 +27,7 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["prisme"]
+        "schemes": ["ai.prisme.app"]
       }
     },
     "updater": {

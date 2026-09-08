@@ -48,10 +48,19 @@ window.addEventListener('DOMContentLoaded', () => {
       return;
     }
     button.disabled = true;
-    button.textContent = 'Connecting…';
+    button.textContent = 'Signing in…';
     try {
       await invoke('set_server_url', { url: origin });
-      await invoke('open_app_window', { url: origin });
+      // Native OIDC in the system browser; resolves once the callback returns.
+      const result = await invoke<{ accessToken: string; consoleUrl: string }>(
+        'sign_in',
+        { apiRoot: origin }
+      );
+      button.textContent = 'Opening…';
+      await invoke('open_app_window', {
+        url: result.consoleUrl,
+        token: result.accessToken,
+      });
     } catch (err) {
       button.disabled = false;
       button.textContent = 'Connect';

@@ -7,11 +7,14 @@
 //!   - the remote "app" window, created here so we can attach:
 //!       * a no-op Notification stub (WKWebView has no web Notification API)
 //!       * a download handler (saves to the OS Downloads folder)
-//!   - deep links (prisme://…) + single-instance
+//!   - native OIDC sign-in via the system browser (see `auth`)
+//!   - deep links (ai.prisme.app://oauth/callback) + single-instance
 //!
 //! Security: sensitive custom commands are guarded to the trusted "main"
 //! window. The remote "app" window is granted no IPC capability, so remote
 //! content (including third-party auth pages) cannot reach any command.
+
+mod auth;
 
 use std::fs;
 use std::path::PathBuf;
@@ -83,19 +86,91 @@ fn set_server_url(webview: WebviewWindow, url: String) -> Result<(), String> {
     fs::write(path, json).map_err(|e| e.to_string())
 }
 
-/// Open the remote server in its own window (native notifications + downloads),
-/// then close the setup window. Created from Rust so we can attach handlers.
+/// Native OIDC sign-in via the system browser. Returns the Bearer access token
+/// and the console URL to load. See `auth` for the full flow.
 #[tauri::command]
-fn open_app_window(webview: WebviewWindow, url: String) -> Result<(), String> {
+async fn sign_in(
+    webview: WebviewWindow,
+    state: tauri::State<'_, auth::AuthState>,
+    api_root: String,
+) -> Result<auth::SignInResult, String> {
+    ensure_setup(&webview)?;
+    let client = reqwest::Client::new();
+
+    let boot = auth::bootstrap(&client, &api_root).await?;
+    let (authorization_endpoint, token_endpoint) =
+        auth::discovery(&client, &boot.provider_url).await?;
+    let (verifier, challenge) = auth::pkce();
+    let expected_state = auth::random_b64url(16);
+    let authorize_url = auth::build_authorize_url(
+        &authorization_endpoint,
+        &boot.client_id,
+        &boot.scopes,
+        &boot.api_url,
+        &expected_state,
+        &challenge,
+    )?;
+
+    // Arm the callback receiver, then open the system browser.
+    let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+    *state.pending.lock().unwrap() = Some(tx);
+    open::that(&authorize_url).map_err(|e| format!("Could not open the browser: {e}"))?;
+
+    // Wait for ai.prisme.app://oauth/callback (5 min).
+    let callback = tokio::time::timeout(std::time::Duration::from_secs(300), rx)
+        .await
+        .map_err(|_| "Sign-in timed out.".to_string())?
+        .map_err(|_| "Sign-in was cancelled.".to_string())?;
+
+    let (code, returned_state) =
+        auth::parse_callback(&callback).ok_or("Malformed authorization callback.")?;
+    if returned_state != expected_state {
+        return Err("State mismatch — sign-in aborted for safety.".into());
+    }
+
+    let (access_token, refresh_token) = auth::exchange(
+        &client,
+        &token_endpoint,
+        &code,
+        &verifier,
+        &boot.client_id,
+        &boot.api_url,
+    )
+    .await?;
+
+    Ok(auth::SignInResult {
+        access_token,
+        console_url: boot.console_url,
+        refresh_token,
+    })
+}
+
+/// Open the remote server in its own window and hand it the Bearer token (the
+/// SPA reads `platform-token` when `window.__PRISME_DESKTOP__` is set), then
+/// close the setup window. Created from Rust so we can attach handlers.
+#[tauri::command]
+fn open_app_window(
+    webview: WebviewWindow,
+    url: String,
+    token: Option<String>,
+) -> Result<(), String> {
     ensure_setup(&webview)?;
     let parsed = tauri::Url::parse(&url).map_err(|e| e.to_string())?;
     let app = webview.app_handle().clone();
+
+    let mut init = NOTIFICATION_SHIM.to_string();
+    if let Some(token) = token {
+        let literal = serde_json::to_string(&token).unwrap_or_else(|_| "\"\"".into());
+        init.push_str(&format!(
+            "\nwindow.__PRISME_DESKTOP__ = true; try {{ localStorage.setItem('platform-token', {literal}); }} catch (e) {{}}"
+        ));
+    }
 
     WebviewWindowBuilder::new(&app, "app", WebviewUrl::External(parsed))
         .title("Prisme.ai")
         .inner_size(1440.0, 900.0)
         .min_inner_size(800.0, 600.0)
-        .initialization_script(NOTIFICATION_SHIM)
+        .initialization_script(&init)
         .on_download(|webview, event| {
             // Redirect downloads to the OS Downloads folder, keeping the name.
             if let DownloadEvent::Requested { destination, .. } = event {
@@ -138,6 +213,7 @@ async fn check_for_updates(app: tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(auth::AuthState::default())
         // single-instance MUST be registered first so a second launch (e.g. a
         // deep link) is routed to the running app instead of starting a new one.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -155,10 +231,18 @@ pub fn run() {
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 let handle = app.handle().clone();
-                app.deep_link().on_open_url(move |_event| {
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        // Route the OAuth callback to the waiting sign-in;
+                        // otherwise just bring the app to the front.
+                        auth::deliver_callback(
+                            handle.state::<auth::AuthState>().inner(),
+                            url.as_str(),
+                        );
+                    }
                     if let Some(w) = handle
-                        .get_webview_window("app")
-                        .or_else(|| handle.get_webview_window("main"))
+                        .get_webview_window("main")
+                        .or_else(|| handle.get_webview_window("app"))
                     {
                         let _ = w.set_focus();
                     }
@@ -176,6 +260,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_server_url,
             set_server_url,
+            sign_in,
             open_app_window
         ])
         .run(tauri::generate_context!())
