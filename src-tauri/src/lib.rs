@@ -205,6 +205,15 @@ fn build_app_window(app: &tauri::AppHandle, url: &str) -> Result<(), String> {
             }
             true
         })
+        .on_new_window(|url, _features| {
+            // target="_blank" / window.open → open in the user's real browser,
+            // never a blank in-app window.
+            let href = url.as_str();
+            if href.starts_with("http://") || href.starts_with("https://") {
+                let _ = open::that(href);
+            }
+            tauri::webview::NewWindowResponse::Deny
+        })
         .on_download(|webview, event| {
             if let DownloadEvent::Requested { destination, .. } = event {
                 if let (Ok(dir), Some(name)) =
