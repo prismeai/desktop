@@ -242,6 +242,63 @@ fn open_app_window(webview: WebviewWindow, url: String) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartupState {
+    mode: String,
+    server: Option<String>,
+}
+
+/// Is the server reachable right now? Any HTTP response counts as reachable;
+/// only a connection/timeout error means offline.
+async fn server_reachable(url: &str) -> bool {
+    match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(6))
+        .build()
+    {
+        Ok(client) => client.get(url).send().await.is_ok(),
+        Err(_) => false,
+    }
+}
+
+/// Resolve what to show at launch, driven by the connection window:
+///   - "app"     — a stored session; if the server is reachable, open the app.
+///   - "offline" — a stored session but the server is unreachable.
+///   - "connect" — no stored session; show the sign-in form.
+#[tauri::command]
+async fn resolve_startup(webview: WebviewWindow) -> Result<StartupState, String> {
+    ensure_setup(&webview)?;
+    let app = webview.app_handle().clone();
+    match get_console_url(&app) {
+        Some(url) => {
+            if server_reachable(&url).await {
+                let app2 = app.clone();
+                let url2 = url.clone();
+                let _ = app.run_on_main_thread(move || {
+                    if build_app_window(&app2, &url2).is_ok() {
+                        if let Some(main) = app2.get_webview_window("main") {
+                            let _ = main.close();
+                        }
+                    }
+                });
+                Ok(StartupState {
+                    mode: "app".into(),
+                    server: Some(url),
+                })
+            } else {
+                Ok(StartupState {
+                    mode: "offline".into(),
+                    server: Some(url),
+                })
+            }
+        }
+        None => Ok(StartupState {
+            mode: "connect".into(),
+            server: None,
+        }),
+    }
+}
+
 /// Return to the native connection screen: (re)create the setup window and
 /// close the remote app window. Clears the stored console URL so the next
 /// launch does not try to reuse the (now ended) session.
@@ -326,16 +383,8 @@ pub fn run() {
                     }
                 });
 
-                // Session reuse: if a previous sign-in stored the console URL,
-                // open the app directly. If the session is stale the SPA bounces
-                // to /signin and on_navigation returns to the connection screen.
-                if let Some(console) = get_console_url(app.handle()) {
-                    if build_app_window(app.handle(), &console).is_ok() {
-                        if let Some(main) = app.get_webview_window("main") {
-                            let _ = main.close();
-                        }
-                    }
-                }
+                // Startup routing (session reuse / offline / connect) is driven
+                // by the connection window via the `resolve_startup` command.
 
                 let updater_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -347,6 +396,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_server_url,
             set_server_url,
+            resolve_startup,
             sign_in,
             cancel_sign_in,
             open_app_window

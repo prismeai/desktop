@@ -12,8 +12,6 @@
     <script type="module" src="/src/main.ts" defer></script>
   </head>
   <body>
-    <!-- Immersive gradient background + glowing orbs (matches the platform
-         onboarding screen) -->
     <div class="orb orb-1"></div>
     <div class="orb orb-2"></div>
     <div class="orb orb-3"></div>
@@ -25,30 +23,46 @@
           Prisme.ai
         </div>
 
-        <h1 class="title">Connect to your server</h1>
-        <p class="subtitle">
-          Enter your Prisme.ai API URL, e.g.
-          <code>https://api.your-company.com</code>.
-        </p>
+        <!-- Loading: shown while we resolve the startup state (reachability). -->
+        <p id="loading" class="subtitle">Connecting…</p>
 
-        <form id="connect-form" novalidate>
-          <label class="label" for="server-url">Server API URL</label>
-          <input
-            class="input"
-            id="server-url"
-            type="text"
-            inputmode="url"
-            autocomplete="url"
-            placeholder="https://api.your-company.com"
-            spellcheck="false"
-            autofocus
-          />
-          <p id="error" class="error" role="alert" hidden></p>
-          <p id="hint" class="hint" hidden>
-            Finish signing in in the window that just opened.
+        <!-- Connect: enter the server and sign in. -->
+        <div id="connect" hidden>
+          <h1 class="title">Connect to your server</h1>
+          <p class="subtitle">
+            Enter your Prisme.ai API URL, e.g.
+            <code>https://api.your-company.com</code>.
           </p>
-          <button class="btn" id="connect-btn" type="submit">Connect</button>
-        </form>
+
+          <form id="connect-form" novalidate>
+            <label class="label" for="server-url">Server API URL</label>
+            <input
+              class="input"
+              id="server-url"
+              type="text"
+              inputmode="url"
+              autocomplete="url"
+              placeholder="https://api.your-company.com"
+              spellcheck="false"
+              autofocus
+            />
+            <p id="error" class="error" role="alert" hidden></p>
+            <p id="hint" class="hint" hidden>
+              Finish signing in in the window that just opened.
+            </p>
+            <button class="btn" id="connect-btn" type="submit">Connect</button>
+          </form>
+        </div>
+
+        <!-- Offline: the stored server is unreachable. -->
+        <div id="offline" hidden>
+          <h1 class="title">Can't reach your server</h1>
+          <p class="subtitle" id="offline-text">
+            We couldn't reach your Prisme.ai server. Check your connection and
+            try again.
+          </p>
+          <button class="btn" id="retry-btn" type="button">Retry</button>
+        </div>
       </div>
     </main>
   </body>

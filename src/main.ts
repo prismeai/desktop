@@ -1,13 +1,20 @@
 /**
- * Prisme.ai desktop — connection screen logic.
+ * Prisme.ai desktop — connection screen.
  *
- * Runs in the trusted local window. On connect, it asks Rust to open the remote
- * server in its own window (native notifications + downloads) and close this one.
+ * On load it resolves the startup state with Rust:
+ *   - "app"     → a valid session was reused; Rust opens the app window.
+ *   - "offline" → the stored server is unreachable; show a Retry screen.
+ *   - "connect" → no stored session; show the sign-in form.
  */
 import { invoke } from '@tauri-apps/api/core';
 
 const $ = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
+
+interface StartupState {
+  mode: 'app' | 'offline' | 'connect';
+  server: string | null;
+}
 
 const normalizeServerUrl = (raw: string): string | null => {
   const trimmed = raw.trim();
@@ -25,6 +32,12 @@ const normalizeServerUrl = (raw: string): string | null => {
 };
 
 window.addEventListener('DOMContentLoaded', () => {
+  const loading = $<HTMLParagraphElement>('loading');
+  const connect = $<HTMLDivElement>('connect');
+  const offline = $<HTMLDivElement>('offline');
+  const offlineText = $<HTMLParagraphElement>('offline-text');
+  const retryBtn = $<HTMLButtonElement>('retry-btn');
+
   const form = $<HTMLFormElement>('connect-form');
   const input = $<HTMLInputElement>('server-url');
   const button = $<HTMLButtonElement>('connect-btn');
@@ -33,11 +46,47 @@ window.addEventListener('DOMContentLoaded', () => {
 
   let signing = false;
 
+  const show = (el: HTMLElement): void => {
+    loading.hidden = true;
+    connect.hidden = true;
+    offline.hidden = true;
+    el.hidden = false;
+  };
+
   const showError = (msg: string): void => {
     error.textContent = msg;
     error.hidden = false;
   };
 
+  // --- Startup resolution (session reuse / offline) ---
+  const resolve = async (): Promise<void> => {
+    show(loading);
+    let state: StartupState;
+    try {
+      state = await invoke<StartupState>('resolve_startup');
+    } catch {
+      state = { mode: 'connect', server: null };
+    }
+    if (state.mode === 'app') {
+      // Rust is opening the app window and closing this one; keep loading.
+      return;
+    }
+    if (state.mode === 'offline') {
+      offlineText.textContent = `We couldn't reach ${state.server ?? 'your Prisme.ai server'}. Check your connection and try again.`;
+      show(offline);
+      return;
+    }
+    // connect
+    void invoke<string | null>('get_server_url').then((prev) => {
+      if (prev) input.value = prev;
+    });
+    show(connect);
+    input.focus();
+  };
+
+  retryBtn.addEventListener('click', () => void resolve());
+
+  // --- Sign-in ---
   const reset = (): void => {
     signing = false;
     input.disabled = false;
@@ -46,11 +95,6 @@ window.addEventListener('DOMContentLoaded', () => {
     hint.hidden = true;
   };
 
-  // Prefill with the last-used server.
-  void invoke<string | null>('get_server_url').then((prev) => {
-    if (prev) input.value = prev;
-  });
-
   const startSignIn = async (): Promise<void> => {
     error.hidden = true;
     const origin = normalizeServerUrl(input.value);
@@ -58,8 +102,6 @@ window.addEventListener('DOMContentLoaded', () => {
       showError('Please enter a valid server URL.');
       return;
     }
-    // Enter signing state — the button becomes "Cancel" so the user is never
-    // stuck if the browser handoff doesn't return (e.g. unregistered scheme).
     signing = true;
     input.disabled = true;
     button.textContent = 'Cancel';
@@ -72,12 +114,9 @@ window.addEventListener('DOMContentLoaded', () => {
       button.disabled = true;
       button.textContent = 'Opening…';
       hint.hidden = true;
-      // The exchange URL sets the httpOnly session cookie in the webview and
-      // redirects to the console — no token handled by the page.
       await invoke('open_app_window', { url: result.exchangeUrl });
     } catch (err) {
       reset();
-      // Silent when the user just closed the sign-in sheet.
       if (String(err) !== '__cancelled__') showError(String(err));
     }
   };
@@ -85,12 +124,12 @@ window.addEventListener('DOMContentLoaded', () => {
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     if (signing) {
-      // Cancel: dropping the Rust-side sender rejects the pending sign_in,
-      // which lands in the catch above and resets the UI.
       void invoke('cancel_sign_in');
       return;
     }
     void startSignIn();
   });
   input.addEventListener('input', () => (error.hidden = true));
+
+  void resolve();
 });
