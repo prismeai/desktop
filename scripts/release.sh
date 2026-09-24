@@ -106,19 +106,24 @@ cmd_secrets() {
   say "${B}Setting release secrets for ${REPO}${N}"
   say "${DIM}Blank input = skip. Existing secrets are only touched if you confirm.${N}"
 
-  head "Updater (required — signs the auto-update feed)"
-  say "  ${DIM}Where: generated once with 'tauri signer generate'. Private key on the"
-  say "  maintainer machine at ~/.tauri/prismeai-desktop-updater.key.${N}"
-  if [ -f "$HOME/.tauri/prismeai-desktop-updater.key" ]; then
+  head "Updater — signs the auto-update feed (one-time, then it lives in CI)"
+  say "  ${DIM}A single keypair for the whole update channel (not per-developer). The"
+  say "  PUBLIC key is baked into the app; the PRIVATE key signs releases and is stored"
+  say "  as a GitHub secret — CI uses it, NOT your machine. Back it up in a password"
+  say "  manager; the local ~/.tauri copy is disposable.${N}"
+  if secret_is_set TAURI_SIGNING_PRIVATE_KEY && secret_is_set TAURI_SIGNING_PRIVATE_KEY_PASSWORD; then
+    ok "Already configured in CI — nothing to do here."
+  elif [ -f "$HOME/.tauri/prismeai-desktop-updater.key" ]; then
     if should_set TAURI_SIGNING_PRIVATE_KEY; then
-      base64 -i "$HOME/.tauri/prismeai-desktop-updater.key" >/dev/null 2>&1 # validate readable
       gh secret set TAURI_SIGNING_PRIVATE_KEY --repo "$REPO" < "$HOME/.tauri/prismeai-desktop-updater.key" >/dev/null && ok "TAURI_SIGNING_PRIVATE_KEY set"
     fi
     if should_set TAURI_SIGNING_PRIVATE_KEY_PASSWORD; then
       printf '' | gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo "$REPO" >/dev/null && ok "TAURI_SIGNING_PRIVATE_KEY_PASSWORD set (empty)"
     fi
   else
-    warn "  ~/.tauri/prismeai-desktop-updater.key not found — set TAURI_SIGNING_PRIVATE_KEY manually."
+    warn "  Not in CI and no local key. Generate once, then commit its PUBLIC key to"
+    warn "  tauri.conf.json (plugins.updater.pubkey):"
+    warn "    npx @tauri-apps/cli signer generate -w ~/.tauri/prismeai-desktop-updater.key -p ''"
   fi
 
   head "macOS — Developer ID certificate (signs the app)"
