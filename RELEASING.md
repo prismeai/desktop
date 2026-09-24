@@ -5,6 +5,18 @@ is **Developer ID + notarization** (direct `.dmg`, Slack-style) with a
 self-update feed on **GitHub Releases**. You set a handful of secrets once, then
 every release is just a git tag.
 
+## Quick start (script)
+
+An interactive helper does all of this and tells you where to find each value:
+
+```bash
+./scripts/release.sh check          # what's set / still missing
+./scripts/release.sh secrets        # set signing + notarization secrets (guided)
+./scripts/release.sh publish 0.1.0  # bump version + tag + push -> signed CI release
+```
+
+The sections below are the manual reference behind the script.
+
 ---
 
 ## 0. Where secrets go
