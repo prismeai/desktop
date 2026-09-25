@@ -319,6 +319,16 @@ fn show_connect_window(app: &tauri::AppHandle) {
     }
 }
 
+/// Change server: wipe the webview session (cookies/storage) so reconnecting —
+/// even to the same server — starts clean and never hits the server's "another
+/// account is already signed in" guard, then return to the connection screen.
+fn change_server(app: &tauri::AppHandle) {
+    if let Some(appw) = app.get_webview_window("app") {
+        let _ = appw.clear_all_browsing_data();
+    }
+    show_connect_window(app);
+}
+
 /// Native application menu: a proper About (name/version/copyright), a Server
 /// menu with "Change Server…", plus Edit (copy/paste), View (reload) and Window.
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
@@ -423,7 +433,24 @@ pub fn run() {
         .manage(auth::AuthState::default())
         .menu(build_menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
-            "change_server" => show_connect_window(app),
+            "change_server" => {
+                use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+                let app = app.clone();
+                app.dialog()
+                    .message("You'll be signed out and returned to the connection screen.")
+                    .title("Change server?")
+                    .kind(MessageDialogKind::Warning)
+                    .buttons(MessageDialogButtons::OkCancelCustom(
+                        "Change Server".to_string(),
+                        "Cancel".to_string(),
+                    ))
+                    .show(move |confirmed| {
+                        if confirmed {
+                            let app2 = app.clone();
+                            let _ = app.run_on_main_thread(move || change_server(&app2));
+                        }
+                    });
+            }
             "reload" => {
                 if let Some(w) = app
                     .get_webview_window("app")
@@ -444,6 +471,7 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }))
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {

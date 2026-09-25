@@ -16,6 +16,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# Native confirmation dialog (e.g. before changing server).
+tauri-plugin-dialog = "2"
 # Custom URL scheme (prisme://…) for deep links.
 tauri-plugin-deep-link = "2"
 # Route a second launch (deep link) to the already-running instance.
