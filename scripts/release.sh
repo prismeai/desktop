@@ -33,13 +33,18 @@ require() {
 
 secret_is_set() { gh secret list --repo "$REPO" 2>/dev/null | awk '{print $1}' | grep -qx "$1"; }
 
-# Ask before overwriting a secret that already exists.
+# Ask before overwriting a secret that already exists. GitHub never exposes a
+# secret's VALUE, only its presence — so a secret can look "set" while being
+# empty/wrong. If a build fails at signing, re-enter it here (answer y).
 should_set() {
   local name="$1"
   if secret_is_set "$name"; then
-    printf '%s' "  ${DIM}${name} already set — replace it? [y/N] ${N}"
+    printf '%s' "  ${Y}${name} is already set.${N} Re-enter it (only if it's wrong/empty)? [y/N] "
     read -r ans
-    [ "${ans:-}" = "y" ] || [ "${ans:-}" = "Y" ]
+    case "${ans:-}" in
+      y | Y) return 0 ;;
+      *) return 1 ;;
+    esac
   else
     return 0
   fi
