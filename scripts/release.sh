@@ -189,7 +189,10 @@ cmd_publish() {
   head "Bumping version to $ver"
   npm version "$ver" --no-git-tag-version --allow-same-version >/dev/null
   node -e "const f='src-tauri/tauri.conf.json';const fs=require('fs');const j=JSON.parse(fs.readFileSync(f));j.version='$ver';fs.writeFileSync(f,JSON.stringify(j,null,2)+'\n')"
-  sed -i '' -E "0,/^version = \".*\"/s//version = \"$ver\"/" src-tauri/Cargo.toml
+  # Only the [package] version sits at the start of a line (deps are inline or
+  # indented), so an anchored, global substitution is safe — and portable to the
+  # BSD sed on macOS, unlike GNU's `0,/re/` range address.
+  sed -i '' -E "s/^version = \".*\"/version = \"$ver\"/" src-tauri/Cargo.toml
   ( cd src-tauri && cargo update -p prismeai-desktop --precise "$ver" --quiet 2>/dev/null || true )
   ok "package.json, tauri.conf.json, Cargo.toml -> $ver"
 
