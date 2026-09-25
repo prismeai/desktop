@@ -58,7 +58,10 @@ jobs:
       - name: Build and release
         uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The org disables write on the default GITHUB_TOKEN, so releases are
+          # created with a dedicated fine-grained PAT (Contents: write) stored as
+          # RELEASE_TOKEN. Falls back to GITHUB_TOKEN when the secret is absent.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           # Updater signing — REQUIRED to emit a signed latest.json.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -88,7 +91,10 @@ jobs:
       - name: Add stable-named download alias (macOS)
         if: matrix.platform == 'macos-latest'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The org disables write on the default GITHUB_TOKEN, so releases are
+          # created with a dedicated fine-grained PAT (Contents: write) stored as
+          # RELEASE_TOKEN. Falls back to GITHUB_TOKEN when the secret is absent.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           dmg=$(ls src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg | head -n1)
           cp "$dmg" "$RUNNER_TEMP/Prisme.ai-macOS.dmg"
@@ -97,7 +103,10 @@ jobs:
       - name: Add stable-named download alias (Windows)
         if: matrix.platform == 'windows-latest'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The org disables write on the default GITHUB_TOKEN, so releases are
+          # created with a dedicated fine-grained PAT (Contents: write) stored as
+          # RELEASE_TOKEN. Falls back to GITHUB_TOKEN when the secret is absent.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
           $exe = Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
