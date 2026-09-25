@@ -319,6 +319,85 @@ fn show_connect_window(app: &tauri::AppHandle) {
     }
 }
 
+/// Native application menu: a proper About (name/version/copyright), a Server
+/// menu with "Change Server…", plus Edit (copy/paste), View (reload) and Window.
+fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
+
+    let about = AboutMetadata {
+        name: Some("Prisme.ai".into()),
+        version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        copyright: Some("© Prisme.ai".into()),
+        website: Some("https://prisme.ai".into()),
+        website_label: Some("prisme.ai".into()),
+        authors: Some(vec!["Prisme.ai".into()]),
+        ..Default::default()
+    };
+
+    let app_menu = Submenu::with_items(
+        app,
+        "Prisme.ai",
+        true,
+        &[
+            &PredefinedMenuItem::about(app, Some("About Prisme.ai"), Some(about))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, None)?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::show_all(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::quit(app, None)?,
+        ],
+    )?;
+
+    let server_menu = Submenu::with_items(
+        app,
+        "Server",
+        true,
+        &[&MenuItem::with_id(app, "change_server", "Change Server…", true, None::<&str>)?],
+    )?;
+
+    let edit_menu = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+
+    let view_menu = Submenu::with_items(
+        app,
+        "View",
+        true,
+        &[
+            &MenuItem::with_id(app, "reload", "Reload", true, Some("CmdOrCtrl+R"))?,
+            &PredefinedMenuItem::fullscreen(app, None)?,
+        ],
+    )?;
+
+    let window_menu = Submenu::with_items(
+        app,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, None)?,
+            &PredefinedMenuItem::maximize(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::close_window(app, None)?,
+        ],
+    )?;
+
+    Menu::with_items(app, &[&app_menu, &server_menu, &edit_menu, &view_menu, &window_menu])
+}
+
 /// Check the release feed for a newer signed build; download, install, restart.
 #[cfg(desktop)]
 async fn check_for_updates(app: tauri::AppHandle) {
@@ -342,6 +421,19 @@ async fn check_for_updates(app: tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .manage(auth::AuthState::default())
+        .menu(build_menu)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "change_server" => show_connect_window(app),
+            "reload" => {
+                if let Some(w) = app
+                    .get_webview_window("app")
+                    .or_else(|| app.get_webview_window("main"))
+                {
+                    let _ = w.eval("location.reload()");
+                }
+            }
+            _ => {}
+        })
         // single-instance MUST be registered first so a second launch (e.g. a
         // deep link) is routed to the running app instead of starting a new one.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
