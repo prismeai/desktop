@@ -80,3 +80,26 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      # The bundle filenames carry the version (e.g. Prisme.ai_0.1.2_universal.dmg),
+      # so `releases/latest/download/<name>` can't be a stable link. Attach a copy
+      # under a fixed name so the docs can offer a one-click "Download" that always
+      # resolves to the newest release.
+      - name: Add stable-named download alias (macOS)
+        if: matrix.platform == 'macos-latest'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dmg=$(ls src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg | head -n1)
+          cp "$dmg" "$RUNNER_TEMP/Prisme.ai-macOS.dmg"
+          gh release upload "${{ github.ref_name }}" "$RUNNER_TEMP/Prisme.ai-macOS.dmg" --clobber --repo "${{ github.repository }}"
+
+      - name: Add stable-named download alias (Windows)
+        if: matrix.platform == 'windows-latest'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
+          Copy-Item $exe.FullName "$env:RUNNER_TEMP/Prisme.ai-Windows-setup.exe"
+          gh release upload "${{ github.ref_name }}" "$env:RUNNER_TEMP/Prisme.ai-Windows-setup.exe" --clobber --repo "${{ github.repository }}"
