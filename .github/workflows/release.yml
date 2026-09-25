@@ -2,14 +2,51 @@ name: Release
 
 # Build signed installers + a signed updater feed (latest.json) for macOS &
 # Windows, and attach them to a GitHub Release. Triggered by pushing a v* tag.
+#
+# The draft release is created ONCE by the `create-release` job; the per-platform
+# `build` jobs then upload into it via `releaseId`. This avoids the race where two
+# matrix jobs each try to create the same release (one wins, the other errors).
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
 
+# Releases need write on `contents`. The default GITHUB_TOKEN carries it unless an
+# org policy restricts it; set a fine-grained PAT as RELEASE_TOKEN (Contents:
+# write) to keep releases working regardless of that policy. It falls back to the
+# default token when the secret is absent.
+env:
+  RELEASE_GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
 jobs:
-  release:
+  create-release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.result }}
+    steps:
+      - name: Create the draft release (once)
+        id: create
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          result-encoding: string
+          script: |
+            const tag = context.ref.replace('refs/tags/', '')
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: `Prisme.ai Desktop ${tag}`,
+              draft: true,
+              prerelease: false,
+            })
+            return String(data.id)
+
+  build:
+    needs: create-release
     permissions:
       contents: write
     strategy:
@@ -55,13 +92,10 @@ jobs:
             echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/apple_api_key.p8" >> "$GITHUB_ENV"
           fi
 
-      - name: Build and release
+      - name: Build and attach installers
         uses: tauri-apps/tauri-action@v0
         env:
-          # The org disables write on the default GITHUB_TOKEN, so releases are
-          # created with a dedicated fine-grained PAT (Contents: write) stored as
-          # RELEASE_TOKEN. Falls back to GITHUB_TOKEN when the secret is absent.
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ env.RELEASE_GH_TOKEN }}
           # Updater signing — REQUIRED to emit a signed latest.json.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -78,10 +112,7 @@ jobs:
           # no hardware token). Wire via bundle.windows.signCommand + AZURE_* secrets
           # when the certificate is set up. Until then the .msi/.exe ships unsigned.
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Prisme.ai Desktop ${{ github.ref_name }}'
-          releaseDraft: true
-          prerelease: false
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
 
       # The bundle filenames carry the version (e.g. Prisme.ai_0.1.2_universal.dmg),
@@ -91,10 +122,7 @@ jobs:
       - name: Add stable-named download alias (macOS)
         if: matrix.platform == 'macos-latest'
         env:
-          # The org disables write on the default GITHUB_TOKEN, so releases are
-          # created with a dedicated fine-grained PAT (Contents: write) stored as
-          # RELEASE_TOKEN. Falls back to GITHUB_TOKEN when the secret is absent.
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ env.RELEASE_GH_TOKEN }}
         run: |
           dmg=$(ls src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg | head -n1)
           cp "$dmg" "$RUNNER_TEMP/Prisme.ai-macOS.dmg"
@@ -103,10 +131,7 @@ jobs:
       - name: Add stable-named download alias (Windows)
         if: matrix.platform == 'windows-latest'
         env:
-          # The org disables write on the default GITHUB_TOKEN, so releases are
-          # created with a dedicated fine-grained PAT (Contents: write) stored as
-          # RELEASE_TOKEN. Falls back to GITHUB_TOKEN when the secret is absent.
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ env.RELEASE_GH_TOKEN }}
         shell: pwsh
         run: |
           $exe = Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
