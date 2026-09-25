@@ -190,7 +190,12 @@ cmd_publish() {
 
   head "Commit + tag"
   git add package.json package-lock.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock 2>/dev/null || true
-  git commit -q -m "chore: release v$ver"
+  if git diff --cached --quiet; then
+    say "  version already $ver — tagging the current commit"
+  else
+    git commit -q -m "chore: release v$ver"
+  fi
+  git rev-parse "v$ver" >/dev/null 2>&1 && die "Tag v$ver already exists. Bump to a new version."
   git tag "v$ver"
   git push origin main --quiet
   git push origin "v$ver" --quiet
