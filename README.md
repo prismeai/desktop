@@ -5,6 +5,16 @@ Prisme.ai server and runs the platform in a dedicated window — with native
 sign-in, downloads to your Downloads folder, session reuse across launches, and
 signed automatic updates.
 
+## Download
+
+> **Preview.** Early build — expect rough edges.
+
+Grab the latest signed installer from the
+[**Releases**](https://github.com/prismeai/desktop/releases/latest) page:
+`.dmg` for macOS (Apple silicon + Intel), `.exe`/`.msi` for Windows. First-launch
+and connection steps are covered in the
+[desktop app guide](https://docs.prisme.ai/get-started/desktop-app).
+
 ## How it works
 
 The app is a **thin native shell**: it loads the web app served by *your*
