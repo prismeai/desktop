@@ -1,6 +1,6 @@
 [package]
 name = "prismeai-desktop"
-version = "0.1.0"
+version = "0.1.2"
 description = "Prisme.ai desktop application"
 authors = ["Prisme.ai"]
 edition = "2021"
