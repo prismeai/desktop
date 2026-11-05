@@ -231,8 +231,10 @@ fn build_app_window(app: &tauri::AppHandle, url: &str) -> Result<(), String> {
 
 /// Open the remote server in its own window, then close the setup window.
 /// `url` is the web-session exchange URL (sets the httpOnly cookie + redirects).
+/// MUST be async: creating a webview from a sync command deadlocks on Windows
+/// (the new window stays blank and the app hangs).
 #[tauri::command]
-fn open_app_window(webview: WebviewWindow, url: String) -> Result<(), String> {
+async fn open_app_window(webview: WebviewWindow, url: String) -> Result<(), String> {
     ensure_setup(&webview)?;
     let app = webview.app_handle().clone();
     build_app_window(&app, &url)?;
